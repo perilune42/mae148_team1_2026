@@ -5,7 +5,7 @@ This tool allows us to label our robocar data quickly and export it for the clas
 
 NOTE: Take photos 1-2 meters away from the robocar in different environments (EBU2 track, anywhere outside)
 
-1. Use 16:9 landscape format (it's available on iphone in camera app, not the regular 4:3)
+1. Use normal 4:3 aspect ratio (default on iphone)
 
 2. Take photos on the same level as the robocar (all angles)
 
