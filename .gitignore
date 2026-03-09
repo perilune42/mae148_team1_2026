@@ -10,3 +10,4 @@ wheels/
 .venv
 
 yolo-detection/dataset/*
+yolo-detection/runs/*

@@ -180,7 +180,8 @@ class MainWindow(QMainWindow):
         # Safety checks
         if not self.current_image_path: return
         labels = self.scene.stored_labels
-        if not labels: return # Don't create empty files if no boxes drawn
+        if not labels: 
+            labels = []
 
         # Generate .txt path (image.jpg -> image.txt)
         base_name = os.path.splitext(self.current_image_path)[0]
@@ -222,8 +223,10 @@ class MainWindow(QMainWindow):
             
             # skip images without corresponding label
             if not os.path.exists(src_txt_path):
-                print(f"Skipping index {index}: No label file found.")
-                continue
+                print(f"Creating empty label for index {index}.")
+                # Create an empty label file
+                with open(src_txt_path, 'w') as f:
+                    pass
 
             # ex: team5_image0.jpg, team5_image0.txt
             ext = os.path.splitext(src_img_path)[1] # .jpg or .png
