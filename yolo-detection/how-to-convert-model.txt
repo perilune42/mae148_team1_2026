@@ -1,3 +1,0 @@
-Go to https://hub.luxonis.com/ai/tools
-It will require an account, simply make one for free
-Download the NN archive after conversion and place in this directory

@@ -1,3 +1,5 @@
+# YOLO training and running on OAK-D camera 
+
 This directory contains scripts to train and run a YOLO detection model.
 
 Using Python 3.12 is recommended.
