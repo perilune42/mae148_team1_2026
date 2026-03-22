@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import cv2
-import depthai as dai
+import depthai as dai # 3.3.0
 import time
 from pathlib import Path
 
