@@ -1,26 +1,6 @@
-# MAE 148 YOLO Speed Labeler
+# MAE/ECE 148 YOLO Labeler and Training
+This is part of Team 1's project for the MAE/ECE 148 project in Winter 2026. The `yolo_labeler` directory contains an easy-to-use GUI to quickly create YOLO-compatible labels, and the `yolo_detection` directory contains the tools needed to train a PyTorch model using Ultralytics and to run a Luxonis OAK-D camera.
 
-This tool allows us to label our robocar data quickly and export it for the class dataset.
-# Taking Images
+This project was intended to be used to recognize other robocars for the class, though it can easily be used for recognizing other object classes if desired.
 
-NOTE: Take photos 1-2 meters away from the robocar in different environments (EBU2 track, anywhere outside)
-
-1. Use normal 4:3 aspect ratio (default on iphone)
-
-2. Take photos on the same level as the robocar (all angles)
-
-# Image Setup
-
-1. Move all images into a single directory
-
-# Labeling Setup
-
-1. Clone this repo
-
-2. Run 'pip install -r requirements.txt' in a venv or 'uv sync' if you have the uv package manager
-
-3. Launch gui with 'python3 label_gui.py' or 'uv run label_gui.py'
-
-4. Enter team number, press CMD + O to open folder
-
-5. Send submission folder to Team 1
+See the README in each directory for more detailed instructions.

@@ -7,8 +7,11 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QGraphicsView,
                                QLabel, QInputDialog, QMessageBox)
 from PySide6.QtCore import Qt, QRectF, QPointF
 from PySide6.QtGui import QPixmap, QPen, QBrush, QColor, QAction
+import random
 
 import numpy as np
+from datetime import datetime
+
 
 
 class MainWindow(QMainWindow):
@@ -51,6 +54,10 @@ class MainWindow(QMainWindow):
         self.btn_next = QPushButton("Next (D) >>")
         self.btn_next.clicked.connect(self.next_image)
         button_layout.addWidget(self.btn_next)
+
+        self.btn_null = QPushButton("Mark as Empty (No Label)")
+        self.btn_null.clicked.connect(self.next_image_null)
+        button_layout.addWidget(self.btn_null)
         
         layout.addLayout(button_layout)
 
@@ -162,6 +169,17 @@ class MainWindow(QMainWindow):
         else:
             self.info_label.setText("Finished! That was last the image. Export now with CMD + E.")
 
+    def next_image_null(self):
+        # 1. Auto-Save Logic
+        self.save_current_labels(allow_empty=True)
+        
+        # 2. Move Index
+        if self.current_index < len(self.image_list) - 1:
+            self.current_index += 1
+            self.load_image_at_index(self.current_index)
+        else:
+            self.info_label.setText("Finished! That was last the image. Export now with CMD + E.")
+
     def prev_image(self):
         """
         Saves current work (just in case), then moves backward.
@@ -172,7 +190,7 @@ class MainWindow(QMainWindow):
             self.current_index -= 1
             self.load_image_at_index(self.current_index)
 
-    def save_current_labels(self):
+    def save_current_labels(self, allow_empty=False):
         """
         Writes the .txt file for the CURRENT image.
         Can potentially label multiple objects
@@ -181,7 +199,11 @@ class MainWindow(QMainWindow):
         if not self.current_image_path: return
         labels = self.scene.stored_labels
         if not labels: 
-            labels = []
+            if allow_empty:
+                labels = []
+            else:
+                print("No labels to save for this image.")
+                return
 
         # Generate .txt path (image.jpg -> image.txt)
         base_name = os.path.splitext(self.current_image_path)[0]
@@ -197,6 +219,7 @@ class MainWindow(QMainWindow):
 
     def export_submission(self):
         # CMD + E: saves renamed images and labels into user specified folder
+        # Automatically splits into 80/20 train/val for Ultralytics YOLO training
         
         if not self.image_list:
             QMessageBox.warning(self, "Error", "No images loaded!")
@@ -206,52 +229,73 @@ class MainWindow(QMainWindow):
         output_dir = QFileDialog.getExistingDirectory(self, "Select Folder to Save Submission (Downloads)")
         if not output_dir: return
 
-        submission_folder = os.path.join(output_dir, f"Team{self.team_id}_Submission")
-        os.makedirs(submission_folder, exist_ok=True)
-        img_folder = os.path.join(submission_folder, "images")
-        os.makedirs(img_folder, exist_ok=True)
-        txt_folder = os.path.join(submission_folder, "labels")
-        os.makedirs(txt_folder, exist_ok=True)
+        submission_folder = os.path.join(output_dir, f"dataset")
+
+        # YOLO folder structure:
+        # Team{id}_Submission/
+        #   images/
+        #     train/
+        #     val/
+        #   labels/
+        #     train/
+        #     val/
+        for split in ["train", "val"]:
+            os.makedirs(os.path.join(submission_folder, "images", split), exist_ok=True)
+            os.makedirs(os.path.join(submission_folder, "labels", split), exist_ok=True)
+
+        # Randomly shuffle and split 80/20
+        indices = list(range(len(self.image_list)))
+        random.shuffle(indices)
+        split_point = int(len(indices) * 0.8)
+        train_indices = set(indices[:split_point])
 
         success_count = 0
-        
-        # rename
+        train_count = 0
+        val_count = 0
+        # At the start of the export function, generate one timestamp for the whole batch
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+
         for index, src_img_path in enumerate(self.image_list):
-            
+
             base_name = os.path.splitext(src_img_path)[0]
-            src_txt_path = base_name + ".txt" # label file path
-            
-            # skip images without corresponding label
+            src_txt_path = base_name + ".txt"
+
+            # Create empty label if missing
             if not os.path.exists(src_txt_path):
                 print(f"Creating empty label for index {index}.")
-                # Create an empty label file
                 with open(src_txt_path, 'w') as f:
                     pass
 
-            # ex: team5_image0.jpg, team5_image0.txt
-            ext = os.path.splitext(src_img_path)[1] # .jpg or .png
-            
-            new_base_name = f"team{self.team_id}_image{index}"
+            ext = os.path.splitext(src_img_path)[1]  # .jpg or .png
+
+            # Determine split folder
+            split = "train" if index in train_indices else "val"
+
+            new_base_name = f"team{self.team_id}_image{index}_{timestamp}"
             new_img_name = new_base_name + ext
             new_txt_name = new_base_name + ".txt"
+            dst_img_path = os.path.join(submission_folder, "images", split, new_img_name)
+            dst_txt_path = os.path.join(submission_folder, "labels", split, new_txt_name)
 
-            dst_img_path = os.path.join(img_folder, new_img_name)
-            dst_txt_path = os.path.join(txt_folder, new_txt_name)
-
-            # copy to new dir
             try:
                 shutil.copy2(src_img_path, dst_img_path)
                 shutil.copy2(src_txt_path, dst_txt_path)
                 success_count += 1
+                if split == "train":
+                    train_count += 1
+                else:
+                    val_count += 1
             except Exception as e:
                 print(f"Error exporting {new_base_name}: {e}")
 
-        # SUCCESS
-        QMessageBox.information(self, "Export Complete", 
-                                f"Success! Exported {success_count} labeled pairs.\n\n"
-                                f"Location: {submission_folder}\n"
-                                f"Format: team{self.team_id}_imageN")
 
+        # SUCCESS
+        QMessageBox.information(self, "Export Complete",
+                                f"Success! Exported {success_count} labeled pairs.\n\n"
+                                f"Train: {train_count} images\n"
+                                f"Val:   {val_count} images\n\n"
+                                f"Location: {submission_folder}\n"
+                                f"Format: team{self.team_id}_imageN_{timestamp}\n")
 
 
 

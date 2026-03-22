@@ -9,8 +9,8 @@ wheels/
 # Virtual environments
 .venv
 
-yolo-detection/dataset/*
-yolo-detection/runs/*
-yolo-detection/*.mp4
-yolo-detection/*.mov
-yolo-detection/oakd_imgs/*
+yolo_detection/dataset/images/train/*
+yolo_detection/dataset/images/val/*
+yolo_detection/dataset/labels/train/*
+yolo_detection/dataset/labels/val/*
+yolo_detection/runs/*
