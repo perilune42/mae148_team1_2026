@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+
+import cv2
+import depthai as dai # 3.3.0
+import time
+from pathlib import Path
+
+from opp_ekf import RobocarEKF as EKF
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+#plt.ion()
+
+fullFrameTracking = False
+
+with dai.Pipeline() as pipeline:
+    # DAG
+    camRgb = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_A)
+    monoLeft = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_B)
+    monoRight = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_C)
+
+    stereo = pipeline.create(dai.node.StereoDepth)
+    leftOutput = monoLeft.requestOutput((640, 400))
+    rightOutput = monoRight.requestOutput((640, 400))
+    leftOutput.link(stereo.left)
+    rightOutput.link(stereo.right)
+
+    nnArchive = dai.NNArchive(Path("model.rvc2.tar.xz"))
+    spatialDetectionNetwork = pipeline.create(dai.node.SpatialDetectionNetwork).build(camRgb, stereo, nnArchive)
+    
+    objectTracker = pipeline.create(dai.node.ObjectTracker)
+
+    spatialDetectionNetwork.setConfidenceThreshold(0.6)
+    spatialDetectionNetwork.input.setBlocking(False)
+    spatialDetectionNetwork.setBoundingBoxScaleFactor(0.5)
+    spatialDetectionNetwork.setDepthLowerThreshold(100)
+    spatialDetectionNetwork.setDepthUpperThreshold(5000)
+    labelMap = spatialDetectionNetwork.getClasses()
+
+    objectTracker.setDetectionLabelsToTrack([0])  # track only person
+    # possible tracking types: ZERO_TERM_COLOR_HISTOGRAM, ZERO_TERM_IMAGELESS, SHORT_TERM_IMAGELESS, SHORT_TERM_KCF
+    objectTracker.setTrackerType(dai.TrackerType.SHORT_TERM_IMAGELESS)
+    # take the smallest ID when new object is tracked, possible options: SMALLEST_ID, UNIQUE_ID
+    objectTracker.setTrackerIdAssignmentPolicy(dai.TrackerIdAssignmentPolicy.SMALLEST_ID)
+
+    preview = objectTracker.passthroughTrackerFrame.createOutputQueue()
+    tracklets = objectTracker.out.createOutputQueue()
+
+    if fullFrameTracking:
+        camRgb.requestFullResolutionOutput().link(objectTracker.inputTrackerFrame)
+        # do not block the pipeline if it's too slow on full frame
+        objectTracker.inputTrackerFrame.setBlocking(False)
+        objectTracker.inputTrackerFrame.setMaxSize(1)
+    else:
+        spatialDetectionNetwork.passthrough.link(objectTracker.inputTrackerFrame)
+
+    spatialDetectionNetwork.passthrough.link(objectTracker.inputDetectionFrame)
+    spatialDetectionNetwork.out.link(objectTracker.inputDetections)
+    
+    # initialization ekf
+    plt.figure()
+    ekf = EKF(0.0, 0.0, 0.0, 0.0)
+    prediction_interval = 0.01
+    mus = []
+    covs = []
+    times = []
+
+    startTime = time.monotonic()
+    counter = 0
+    fps = 0
+    color = (255, 255, 255)
+    pipeline.start()
+    
+    last_prediction_time = startTime
+    last_correction_time = startTime
+    
+    while(pipeline.isRunning()):
+        current_time = time.monotonic()
+        
+        if (current_time - last_prediction_time) >= prediction_interval:
+            dt = current_time - last_prediction_time
+            ekf.prediction(dt)
+            last_prediction_time += prediction_interval
+        
+        imgFrame = preview.tryGet()
+        track = tracklets.tryGet()
+        if imgFrame and track:
+            assert isinstance(imgFrame, dai.ImgFrame), "Expected ImgFrame"
+            assert isinstance(track, dai.Tracklets), "Expected Tracklets"
+            counter+=1
+            
+            frame = imgFrame.getCvFrame()
+            trackletsData = track.tracklets
+            for t in trackletsData:
+                roi = t.roi.denormalize(frame.shape[1], frame.shape[0])
+                x1 = int(roi.topLeft().x)
+                y1 = int(roi.topLeft().y)
+                x2 = int(roi.bottomRight().x)
+                y2 = int(roi.bottomRight().y)
+
+                try:
+                    label = labelMap[t.label]
+                except:
+                    label = t.label
+                    
+                if t.status.name == "TRACKED":
+                    dt = current_time - last_correction_time
+                    cam_x = t.spatialCoordinates.x / 1000.0
+                    cam_y = t.spatialCoordinates.y / 1000.0
+                    cam_z = t.spatialCoordinates.z / 1000.0
+                    ekf.correction(dt, [cam_x, cam_y, cam_z], [0.0, 0.0, 0.0, 0.0])
+                    
+                    last_correction_time = current_time
+                    
+                cv2.putText(frame, str(label), (x1 + 10, y1 + 20), cv2.FONT_HERSHEY_TRIPLEX, 0.5, 255)
+                cv2.putText(frame, f"ID: {[t.id]}", (x1 + 10, y1 + 35), cv2.FONT_HERSHEY_TRIPLEX, 0.5, 255)
+                cv2.putText(frame, t.status.name, (x1 + 10, y1 + 50), cv2.FONT_HERSHEY_TRIPLEX, 0.5, 255)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, cv2.FONT_HERSHEY_SIMPLEX)
+
+                #cv2.putText(frame, f"X: {(t.spatialCoordinates.x / 1000):.2f} m", (x1 + 10, y1 + 65), cv2.FONT_HERSHEY_TRIPLEX, 0.5, 255)
+                cv2.putText(frame, f"ekf_X: {ekf.mean[0]} m", (x1 + 10, y1 + 80), cv2.FONT_HERSHEY_TRIPLEX, 0.5, 255)
+                cv2.putText(frame, f"ekf_Y: {ekf.mean[1]} m", (x1 + 10, y1 + 95), cv2.FONT_HERSHEY_TRIPLEX, 0.5, 255)
+                
+                cv2.putText(frame, "NN fps: {:.2f}".format(fps), (2, frame.shape[0] - 4), cv2.FONT_HERSHEY_TRIPLEX, 0.4, color)
+
+                cv2.imshow("tracker", frame)
+                
+        if (current_time - startTime) > 1 :
+                fps = counter / (current_time - startTime)
+                counter = 0
+                startTime = current_time  
+                
+        mus.append(ekf.mean)
+        covs.append(ekf.cov)
+        times.append(current_time - startTime)
+        """
+        if counter % 10 == 0:
+            plt.clf()
+                        
+            #ax.fill_between(t_arr, m_arr - 2*s_arr, m_arr + 2*s_arr, color='blue', alpha=0.2, label="Uncertainty (2σ)")
+            
+            plt.suptitle('Live EKF Tracking')
+
+            plt.subplot(2, 2, 1)
+            plt.title('Position X')
+            plt.plot([mu[0] for mu in mus], 'b')
+            plt.plot([mu[0] + 2 * np.sqrt(cov[0,0]) for mu,cov in zip(mus, covs)], 'r--') # +2 std
+            plt.plot([mu[0] - 2 * np.sqrt(cov[0,0]) for mu,cov in zip(mus, covs)], 'r--') # -2 std
+
+            plt.subplot(2, 2, 2)
+            plt.title('Position Y')
+            plt.plot([mu[1] for mu in mus], 'b')
+            plt.plot([mu[1] + 2 * np.sqrt(cov[1,1]) for mu,cov in zip(mus, covs)], 'r--') # +2 std
+            plt.plot([mu[1] - 2 * np.sqrt(cov[1,1]) for mu,cov in zip(mus, covs)], 'r--') # -2 std
+
+            plt.subplot(2, 2, 3)
+            plt.title('Yaw Angle')
+
+            plt.plot([mu[2] for mu in mus], 'b')
+            plt.plot([mu[2] + 2 * np.sqrt(cov[2,2]) for mu,cov in zip(mus, covs)], 'r--') # +2 std
+            plt.plot([mu[2] - 2 * np.sqrt(cov[2,2]) for mu,cov in zip(mus, covs)], 'r--') # -2 std
+
+            plt.subplot(2, 2, 4)
+            plt.title('Velocity')
+            plt.plot([mu[3] for mu in mus], 'b')
+            plt.plot([mu[3] + 2 * np.sqrt(cov[3,3]) for mu,cov in zip(mus, covs)], 'r--') # +2 std
+            plt.plot([mu[3] - 2 * np.sqrt(cov[3,3]) for mu,cov in zip(mus, covs)], 'r--') # -2 std
+                
+            plt.tight_layout()
+            
+            plt.pause(0.001)
+        """
+        
+        if cv2.waitKey(1) == ord('q'):
+            break
